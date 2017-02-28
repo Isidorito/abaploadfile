@@ -6,6 +6,8 @@
 
 REPORT  zlicc_load.
 
+*Change the following type to reproduce the one you need to print in screen.
+
 TYPES: BEGIN OF ty_output,
           lgtyp     TYPE lagp-lgtyp,
           lgpla     TYPE lagp-lgpla,
@@ -13,25 +15,16 @@ TYPES: BEGIN OF ty_output,
           comment   TYPE string,
           oldidatu  TYPE char10,
           newidatu  TYPE char10,
-          abcin     TYPE marc-abcin,
         END OF ty_output,
-
-        BEGIN OF ty_cc,
-          matnr TYPE marc-matnr,
-          werks TYPE marc-werks,
-          abcin TYPE marc-abcin,
-        END OF ty_cc.
 
 DATA: it_file     TYPE TABLE OF string,
       wa_file     TYPE string,
       it_output   TYPE TABLE OF ty_output,
       wa_output   TYPE ty_output,
-      it_cc       TYPE TABLE OF ty_cc,
-      wa_cc       TYPE ty_cc,
+      
 *     variables to complete the ALV title
       lv_file     TYPE string,
       lv_count    TYPE string,
-      lv_rbcount  TYPE string,
       lv_title    TYPE lvc_title.
 
 ****Needed for ALV
@@ -46,8 +39,8 @@ DATA: g_it_fieldcat TYPE slis_t_fieldcat_alv,
 *                         SELECTION-SCREEN
 *&---------------------------------------------------------------------*
 
-PARAMETERS p_file LIKE rlgrap-filename.
-PARAMETERS p_werks TYPE marc-werks OBLIGATORY DEFAULT 'F002'.
+PARAMETERS p_file LIKE rlgrap-filename. "You can add a predefined path here
+PARAMETERS p_werks TYPE marc-werks.
 
 
 *&---------------------------------------------------------------------*
@@ -56,6 +49,8 @@ PARAMETERS p_werks TYPE marc-werks OBLIGATORY DEFAULT 'F002'.
 
 AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file.
 
+*This function lets you search the file in your computer
+
   CALL FUNCTION 'F4_FILENAME'
     IMPORTING
       file_name = p_file.
@@ -63,6 +58,7 @@ AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file.
 *We move to lv_file to avoid issues with GUI_UPLOAD filename format
 
   lv_file = p_file.
+  
 *&---------------------------------------------------------------------*
 *                               MAIN
 *&---------------------------------------------------------------------*
@@ -81,9 +77,9 @@ START-OF-SELECTION.
 *&      Form  GET_FILE
 *&---------------------------------------------------------------------*
 * Uploading the file into a table
-* Each line its a string because we receive multiple formats
-*  - Record rows
-*  - Spool headers (Will be deleted in another step)
+* Each line its a string because we could receive multiple formats
+*  - Record rows (Those we need)
+*  - Format rows (Usually we will need to avoid those)
 *----------------------------------------------------------------------*
 *  -->  p1        text
 *  <--  p2        text
@@ -138,9 +134,7 @@ ENDFORM.                    " GET_FILE
 *&      Form  PROCESS_DATA
 *&---------------------------------------------------------------------*
 * Moving just the record lines
-* Avoiding lines added in the spool
-* Using |X as condition to check if the line its a record
-* The X its added in the file but not viewable in the spool
+* Avoiding format lines
 *----------------------------------------------------------------------*
 *  -->  p1        text
 *  <--  p2        text
@@ -150,7 +144,7 @@ FORM process_data .
   LOOP AT it_file INTO wa_file.
 
     IF wa_file IS NOT INITIAL.
-      IF ( wa_file(2) = '|X') OR ( wa_file CS 'Ready / Blocked'   ) .   "In further versions, this logic could be changed to check every posible state instead of |X
+*      IF (    ) .   "Uncomment and Add condition to avoid non desired lines
 
 *       We accumulate the R/B records to use it in the ALV title
         IF wa_file CS 'Ready / Blocked' .
@@ -170,48 +164,11 @@ FORM process_data .
         APPEND wa_output TO it_output.
         CLEAR wa_output.
 
-      ENDIF.
+*     ENDIF.     "Uncomment if you are using a condition to select rows
     ENDIF.
   ENDLOOP.
 
 *At this point it_output contains the full list of records
-* but misses the werks from MARC table
-
-  IF it_output IS NOT INITIAL.
-
-    SELECT  matnr
-            werks
-            abcin
-            FROM                marc
-            INTO TABLE          it_cc
-            FOR ALL ENTRIES IN  it_output
-            WHERE               matnr = it_output-matnr
-            AND                 werks = p_werks
-    .
-  ENDIF.
-
-*  Now we pass the ABCIN value from it_cc to it_output
-
-  IF it_cc IS NOT INITIAL.
-
-    CLEAR wa_output.
-
-    LOOP AT it_output INTO wa_output.
-
-      READ TABLE it_cc
-      INTO       wa_cc
-      WITH KEY   matnr = wa_output-matnr.
-
-      IF sy-subrc = 0.
-        wa_output-abcin = wa_cc-abcin.
-      ENDIF.
-
-      MODIFY it_output FROM wa_output.
-      CLEAR wa_output.
-
-    ENDLOOP.
-
-  ENDIF.
 
 ENDFORM.                    " PROCESS_DATA
 *&---------------------------------------------------------------------*
@@ -225,9 +182,9 @@ ENDFORM.                    " PROCESS_DATA
 FORM print_output .
 
 * Datos del fieldcat para el ALV
-  g_st_fieldcat-fieldname = 'LGTYP'. "Nombre del campo de la tabla
-  g_st_fieldcat-seltext_m = 'Type'. "Descripción media
-  g_st_fieldcat-seltext_s = 'Typ'. "Descripción corta
+  g_st_fieldcat-fieldname = 'LGTYP'. "Table Name
+  g_st_fieldcat-seltext_m = 'Type'.  "Mid. Desc.
+  g_st_fieldcat-seltext_s = 'Typ'.   "Short Desc.
   APPEND g_st_fieldcat TO g_it_fieldcat.
 
   g_st_fieldcat-fieldname = 'LGPLA'.
@@ -255,16 +212,11 @@ FORM print_output .
   g_st_fieldcat-seltext_s = 'New Inv.'.
   APPEND g_st_fieldcat TO g_it_fieldcat.
 
-  g_st_fieldcat-fieldname = 'ABCIN'.
-  g_st_fieldcat-seltext_m = 'Cycle Counting'.
-  g_st_fieldcat-seltext_s = 'C.C.'.
-  APPEND g_st_fieldcat TO g_it_fieldcat.
-
   DESCRIBE TABLE it_output LINES lv_count.
 
-  lv_count = lv_count - lv_rbcount.
+ *Charge the ALV Title to display how many records we displayed
 
-  CONCATENATE 'InventoryProposal:  '  lv_count ' Ready / Blocked:  ' lv_rbcount INTO lv_title SEPARATED BY ' ' .
+  CONCATENATE 'Number of records: '  lv_count INTO lv_title SEPARATED BY ' ' .
 
 * Función ALV
   CALL FUNCTION 'REUSE_ALV_GRID_DISPLAY'
